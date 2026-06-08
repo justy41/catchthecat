@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Catch the Cat!</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #ffb7c5;
+    cursor: none;
+    font-family: 'Nunito', sans-serif;
+  }
+
+  #bg {
+    position: fixed;
+    inset: 0;
+    background: #ffb7c5;
+    transition: background 1.5s ease;
+  }
+
+  #bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.18) 1.5px, transparent 1.5px);
+    background-size: 32px 32px;
+  }
+
+  #cat {
+    position: fixed;
+    width: 150px;
+    height: 150px;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    will-change: left, top;
+    filter: drop-shadow(0 6px 12px rgba(180,60,80,0.18));
+  }
+
+  /* Cat image — swap src to any path/URL you want */
+  #cat img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    transition: filter 0.15s;
+  }
+
+  /* Smug face during ankle-breaker — swap handled in JS */
+  #cat.smug #cat-normal { display: none; }
+  #cat.smug #cat-smug   { display: block !important; }
+
+  /* Caught state */
+  #cat.caught {
+    width: 110px;
+    height: 110px;
+    transition: width 0.35s cubic-bezier(.34,1.56,.64,1),
+                height 0.35s cubic-bezier(.34,1.56,.64,1);
+  }
+
+  #cursor {
+    position: fixed;
+    font-size: 36px;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    will-change: left, top;
+  }
+
+  #hint {
+    position: fixed;
+    bottom: 32px;
+    left: 0; right: 0;
+    text-align: center;
+    font-family: 'Nunito', sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+    color: rgba(130, 30, 55, 0.55);
+    letter-spacing: 0.03em;
+    pointer-events: none;
+    transition: opacity 0.8s;
+  }
+
+  #message {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 2s ease;
+    z-index: 30;
+  }
+
+  #message.visible { opacity: 1; }
+
+  #message h1 {
+    font-family: 'Fredoka One', cursive;
+    font-size: clamp(40px, 9vw, 90px);
+    color: #7c1d3f;
+    text-shadow: 0 3px 0 rgba(255,255,255,0.6), 0 6px 20px rgba(180,50,80,0.2);
+    letter-spacing: 0.02em;
+    text-align: center;
+    line-height: 1.15;
+  }
+
+  #message p {
+    margin-top: 14px;
+    font-size: clamp(16px, 3vw, 24px);
+    color: #b03060;
+    font-weight: 700;
+    opacity: 0.8;
+  }
+
+  #particles {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 25;
+  }
+
+  .particle {
+    position: absolute;
+    font-size: 22px;
+    pointer-events: none;
+    animation: burst 1.4s ease forwards;
+  }
+
+  @keyframes burst {
+    0%   { opacity: 1; transform: translate(0,0) scale(1) rotate(0deg); }
+    100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.4) rotate(var(--rot)); }
+  }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+<div id="particles"></div>
+
+<div id="cat">
+  <!-- Normal image — change src to your path/URL -->
+  <img id="cat-normal" src="cat.png" alt="cat">
+  <!-- Ankle-breaker image — change src to your path/URL -->
+  <img id="cat-smug" src="cat_sike.png" alt="cat smug" style="display:none;">
+</div>
+
+<div id="cursor">🤚</div>
+<div id="hint">Chase and catch the cat, my love!</div>
+<div id="message">
+  <h1>🎂 Happy Anniversary! 🎂</h1>
+  <p>You caught the sneaky cat! 😻</p>
+</div>
+
+<script>
+const bg       = document.getElementById('bg');
+const catEl    = document.getElementById('cat');
+const cursorEl = document.getElementById('cursor');
+const msgEl    = document.getElementById('message');
+const hintEl   = document.getElementById('hint');
+const particles= document.getElementById('particles');
+
+/* ── State ── */
+let W = window.innerWidth, H = window.innerHeight;
+let mouseX = -999, mouseY = -999;
+let prevMouseX = -999, prevMouseY = -999;
+let mouseVx = 0, mouseVy = 0;
+let catX = W / 2, catY = H / 2;
+let catVx = 0,    catVy = 0;
+let caught = false;
+let flipped = false;
+let lastTime = 0;
+
+const FLEE_RADIUS  = 480;
+const MAX_SPEED    = 850;
+const IDLE_SPEED   = 60;
+const ACCEL        = 5600;
+const FRICTION     = 5;
+const CATCH_RADIUS = 52;
+
+/* Ankle-breaker state */
+let ankleCooldown  = 0;
+let fakeState      = null; // null | 'freeze' | 'dart'
+let fakeTimer      = 0;
+let fakeDartVx     = 0, fakeDartVy = 0;
+
+/* Cat personality */
+let wanderAngle = Math.random() * Math.PI * 2;
+let wanderTimer = 0;
+
+/* ── Mouse / Touch tracking ── */
+let lastMouseTime = 0;
+window.addEventListener('mousemove', e => {
+  const now = performance.now();
+  const mdt = Math.min((now - lastMouseTime) / 1000, 0.05);
+  lastMouseTime = now;
+  if (mdt > 0) {
+    const rawVx = (e.clientX - mouseX) / mdt;
+    const rawVy = (e.clientY - mouseY) / mdt;
+    mouseVx = mouseVx * 0.6 + rawVx * 0.4;
+    mouseVy = mouseVy * 0.6 + rawVy * 0.4;
+  }
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  cursorEl.style.left = mouseX + 'px';
+  cursorEl.style.top  = mouseY + 'px';
+});
+
+window.addEventListener('mouseleave', () => { mouseX = -999; mouseY = -999; });
+
+window.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  mouseX = t.clientX; mouseY = t.clientY;
+  cursorEl.style.left = mouseX + 'px';
+  cursorEl.style.top  = mouseY + 'px';
+}, { passive: false });
+
+window.addEventListener('resize', () => { W = window.innerWidth; H = window.innerHeight; });
+
+const ANKLE_TRIGGER_DIST  = CATCH_RADIUS * 2.6;
+const ANKLE_SPEED_THRESH  = 450;
+const ANKLE_APPROACH_THRESH = 300;
+
+/* ── Ankle-breaker trigger ── */
+function tryAnkleBreaker(dist) {
+  if (ankleCooldown > 0 || fakeState) return;
+  if (dist > ANKLE_TRIGGER_DIST) return;
+
+  const dx = mouseX - catX, dy = mouseY - catY;
+  const approachDot = -(mouseVx * dx + mouseVy * dy) / Math.max(dist, 1);
+  const mouseSpd = Math.sqrt(mouseVx * mouseVx + mouseVy * mouseVy);
+
+  if (mouseSpd > ANKLE_SPEED_THRESH && approachDot > ANKLE_APPROACH_THRESH) {
+    fakeState = 'freeze';
+    fakeTimer = 0.11;
+
+    const incomingAngle = Math.atan2(mouseVy, mouseVx);
+    const perpA = incomingAngle + Math.PI / 2;
+    const perpB = incomingAngle - Math.PI / 2;
+    const cx = W / 2, cy = H / 2;
+    const scoreA = Math.cos(perpA) * (catX - cx) + Math.sin(perpA) * (catY - cy);
+    const scoreB = Math.cos(perpB) * (catX - cx) + Math.sin(perpB) * (catY - cy);
+    const dartAngle = scoreA < scoreB ? perpA : perpB;
+    const dartSpeed = 2250 + Math.random() * 900;
+    fakeDartVx = Math.cos(dartAngle) * dartSpeed;
+    fakeDartVy = Math.sin(dartAngle) * dartSpeed;
+
+    catEl.classList.add('smug');
+    ankleCooldown = 0.2;
+  }
+}
+
+/* ── Game loop ── */
+function loop(ts) {
+  if (caught) return;
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  ankleCooldown = Math.max(0, ankleCooldown - dt);
+
+  const dx = mouseX - catX;
+  const dy = mouseY - catY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  if (fakeState === 'freeze') {
+    fakeTimer -= dt;
+    catVx *= 0.05;
+    catVy *= 0.05;
+    if (fakeTimer <= 0) {
+      fakeState = 'dart';
+      fakeTimer = 0.55;
+      catVx = fakeDartVx;
+      catVy = fakeDartVy;
+    }
+  } else if (fakeState === 'dart') {
+    fakeTimer -= dt;
+    catVx += fakeDartVx * 0.6 * dt;
+    catVy += fakeDartVy * 0.6 * dt;
+    if (fakeTimer <= 0) {
+      fakeState = null;
+      catEl.classList.remove('smug');
+    }
+  } else {
+    wanderTimer -= dt;
+    if (wanderTimer <= 0) {
+      wanderAngle += (Math.random() - 0.5) * 1.8;
+      wanderTimer = 0.6 + Math.random() * 0.8;
+    }
+
+    if (dist < FLEE_RADIUS && mouseX > 0) {
+      const angle = Math.atan2(dy, dx);
+      const swerve = (Math.random() - 0.5) * 0.5;
+      const fleeAngle = angle + Math.PI + swerve;
+      const urgency = 1 - dist / FLEE_RADIUS;
+      catVx += Math.cos(fleeAngle) * ACCEL * urgency * dt;
+      catVy += Math.sin(fleeAngle) * ACCEL * urgency * dt;
+    } else {
+      catVx += Math.cos(wanderAngle) * IDLE_SPEED * dt;
+      catVy += Math.sin(wanderAngle) * IDLE_SPEED * dt;
+    }
+    if (mouseX > 0) tryAnkleBreaker(dist);
+  }
+
+  catVx -= catVx * FRICTION * dt;
+  catVy -= catVy * FRICTION * dt;
+
+  const spd = Math.sqrt(catVx * catVx + catVy * catVy);
+  if (spd > MAX_SPEED) {
+    catVx = (catVx / spd) * MAX_SPEED;
+    catVy = (catVy / spd) * MAX_SPEED;
+  }
+
+  catX += catVx * dt;
+  catY += catVy * dt;
+
+  const PAD = 44;
+  if (catX < PAD)     { catX = PAD;     catVx =  Math.abs(catVx) * 0.6; }
+  if (catX > W - PAD) { catX = W - PAD; catVx = -Math.abs(catVx) * 0.6; }
+  if (catY < PAD)     { catY = PAD;     catVy =  Math.abs(catVy) * 0.6; }
+  if (catY > H - PAD) { catY = H - PAD; catVy = -Math.abs(catVy) * 0.6; }
+
+  if (Math.abs(catVx) > 5) {
+    const shouldFlip = catVx < 0;
+    if (shouldFlip !== flipped) {
+      flipped = shouldFlip;
+      catEl.style.transform = `translate(-50%, -50%) scaleX(${flipped ? -1 : 1})`;
+    }
+  }
+
+  catEl.style.left = catX + 'px';
+  catEl.style.top  = catY + 'px';
+
+  const catchMouseSpd = Math.sqrt(mouseVx * mouseVx + mouseVy * mouseVy);
+  if (dist < CATCH_RADIUS && mouseX > 0 && catchMouseSpd < 160 && fakeState !== 'freeze') {
+    doCatch();
+    return;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function doCatch() {
+  caught = true;
+  catEl.classList.remove('smug');
+  catEl.classList.add('caught');
+  catEl.style.transform = 'translate(-50%, -50%)';
+  hintEl.style.opacity = '0';
+  cursorEl.style.display = 'none';
+  bg.style.background = '#ffd6e0';
+
+  const emojis = ['🎉','🎊','✨','⭐','🌟','💖','🎈','🎀'];
+  for (let i = 0; i < 24; i++) {
+    const p = document.createElement('div');
+    p.className = 'particle';
+    p.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    const angle = (i / 24) * Math.PI * 2;
+    const r = 80 + Math.random() * 160;
+    p.style.setProperty('--tx', Math.cos(angle) * r + 'px');
+    p.style.setProperty('--ty', Math.sin(angle) * r + 'px');
+    p.style.setProperty('--rot', (Math.random() * 360) + 'deg');
+    p.style.left = (catX - 11) + 'px';
+    p.style.top  = (catY - 11) + 'px';
+    p.style.animationDelay = (Math.random() * 0.2) + 's';
+    particles.appendChild(p);
+  }
+
+  setTimeout(() => msgEl.classList.add('visible'), 300);
+}
+
+requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
+</script>
+</body>
+</html>
